@@ -1856,9 +1856,6 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     this.config = { ...config, provider: this.provider };
     this.agentId = launchContext?.agentId;
     this.launchEnv = launchContext?.env;
-    this.currentMode = config.modeId ?? this.currentMode;
-    this.currentModel = config.model ?? this.currentModel;
-    this.thinkingOptionId = config.thinkingOptionId ?? this.thinkingOptionId;
     this.currentTitle = config.title ?? this.currentTitle;
     this.bootstrapThreadEventPending = true;
     await this.applyConfiguredOverrides();
