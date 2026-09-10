@@ -842,14 +842,14 @@ test("cursor provider extending acp uses CursorACPAgentClient", () => {
   expect(registry.cursor.createClient(logger).provider).toBe("cursor");
   expect(mockState.constructorArgs.cursor).toEqual([
     {
-      command: ["cursor-agent", "acp"],
+      command: ["cursor-agent", "--header", "x-cursor-byok-local-metadata: 1", "acp"],
       env: {
         CURSOR_AGENT_LOG: "debug",
       },
       providerParams: undefined,
     },
     {
-      command: ["cursor-agent", "acp"],
+      command: ["cursor-agent", "--header", "x-cursor-byok-local-metadata: 1", "acp"],
       env: {
         CURSOR_AGENT_LOG: "debug",
       },
@@ -865,7 +865,7 @@ test("wrapped cursor client lists ACP features through the inner provider", asyn
       cursor: {
         extends: "acp",
         label: "Cursor",
-        command: ["cursor-agent", "acp"],
+        command: ["cursor-agent", "--header", "x-cursor-byok-local-metadata: 1", "acp"],
       },
     },
   });
