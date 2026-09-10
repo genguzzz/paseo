@@ -46,6 +46,7 @@ interface GenericACPAgentClientOptions {
   providerParams?: unknown;
   waitForInitialCommands?: boolean;
   initialCommandsWaitTimeoutMs?: number;
+  featureProbeCacheTtlMs?: number;
   diagnosticPhaseTimeoutMs?: number;
   clientCapabilityMeta?: ACPClientCapabilityMeta;
   configFeatureOptions?: ACPConfigFeatureOption[];
@@ -54,11 +55,16 @@ interface GenericACPAgentClientOptions {
   now?: () => number;
 }
 
+const GENERIC_ACP_AVAILABILITY_CACHE_TTL_MS = 5 * 60_000;
+
 export class GenericACPAgentClient extends ACPAgentClient {
   private readonly command: [string, ...string[]];
   private readonly providerId?: string;
   private readonly label?: string;
   private readonly diagnosticPhaseTimeoutMs?: number;
+  private readonly availabilityNow: () => number;
+  private availabilityCache: { value: boolean; expiresAt: number } | null = null;
+  private availabilityInFlight: Promise<boolean> | null = null;
 
   constructor(options: GenericACPAgentClientOptions) {
     const providerParams = parseGenericACPProviderParams(options.providerParams);
@@ -72,6 +78,7 @@ export class GenericACPAgentClient extends ACPAgentClient {
       capabilities: buildGenericACPCapabilities(providerParams),
       waitForInitialCommands: options.waitForInitialCommands,
       initialCommandsWaitTimeoutMs: options.initialCommandsWaitTimeoutMs,
+      featureProbeCacheTtlMs: options.featureProbeCacheTtlMs,
       clientCapabilities: providerParams.clientCapabilities,
       clientCapabilityMeta: options.clientCapabilityMeta,
       configFeatureOptions: options.configFeatureOptions,
@@ -84,6 +91,7 @@ export class GenericACPAgentClient extends ACPAgentClient {
     this.providerId = options.providerId;
     this.label = options.label;
     this.diagnosticPhaseTimeoutMs = options.diagnosticPhaseTimeoutMs;
+    this.availabilityNow = options.now ?? Date.now;
   }
 
   protected override async resolveLaunchCommand(): Promise<{ command: string; args: string[] }> {
@@ -94,9 +102,32 @@ export class GenericACPAgentClient extends ACPAgentClient {
   }
 
   override async isAvailable(): Promise<boolean> {
-    const launch = await this.resolveConfiguredLaunch();
-    const availability = await checkProviderLaunchAvailable(launch);
-    return availability.available;
+    if (this.availabilityCache && this.availabilityCache.expiresAt > this.availabilityNow()) {
+      return this.availabilityCache.value;
+    }
+    if (this.availabilityInFlight) {
+      return await this.availabilityInFlight;
+    }
+
+    const check = (async () => {
+      const launch = await this.resolveConfiguredLaunch();
+      const availability = await checkProviderLaunchAvailable(launch);
+      if (availability.available) {
+        this.availabilityCache = {
+          value: true,
+          expiresAt: this.availabilityNow() + GENERIC_ACP_AVAILABILITY_CACHE_TTL_MS,
+        };
+      }
+      return availability.available;
+    })();
+    this.availabilityInFlight = check;
+    try {
+      return await check;
+    } finally {
+      if (this.availabilityInFlight === check) {
+        this.availabilityInFlight = null;
+      }
+    }
   }
 
   async getDiagnostic(): Promise<{ diagnostic: string }> {

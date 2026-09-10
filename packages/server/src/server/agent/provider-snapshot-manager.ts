@@ -531,13 +531,28 @@ export class ProviderSnapshotManager {
   async resolveCreateConfig(
     input: ResolveProviderCreateConfigOptions,
   ): Promise<ResolvedProviderCreateConfig> {
+    const definition = this.requireProvider(input.provider);
+    const parent = input.parent ? this.resolveParent(input.parent) : null;
+
+    // A normal top-level create does not need a catalog snapshot. The provider
+    // validates and applies an explicit mode while initializing the real session;
+    // avoid launching a throwaway process just to repeat that work first.
+    if (parent === null && !input.unattended) {
+      return definition.resolveCreateConfig({
+        provider: input.provider,
+        requestedMode: input.requestedMode,
+        featureValues: input.featureValues,
+        parent: null,
+        unattended: false,
+        availableModes: undefined,
+      });
+    }
+
     const entry = await this.getReadyProvider({
       cwd: input.cwd,
       provider: input.provider,
       wait: true,
     });
-    const definition = this.requireProvider(input.provider);
-    const parent = input.parent ? this.resolveParent(input.parent) : null;
     return definition.resolveCreateConfig({
       provider: input.provider,
       requestedMode: input.requestedMode,

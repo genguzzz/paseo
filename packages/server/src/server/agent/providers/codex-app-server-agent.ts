@@ -139,6 +139,7 @@ function isCodexAlreadyUnarchivedError(error: unknown, threadId: string): boolea
 const TURN_START_TIMEOUT_MS = 90 * 1000;
 const INTERRUPT_TIMEOUT_MS = 2_000;
 const CODEX_PROVIDER = "codex" as const;
+const CODEX_AVAILABILITY_CACHE_TTL_MS = 5 * 60_000;
 // Codex treats most app-server client names as the model-request originator.
 // This reserved Codex name is non-originating, so requests keep Codex's default
 // CLI identity instead of showing up as Paseo in provider usage logs.
@@ -3468,7 +3469,9 @@ export class CodexAppServerAgentSession implements AgentSession {
   }
 
   private async establishConnection(): Promise<void> {
+    const startedAt = Date.now();
     const child = await this.spawnAppServer();
+    const spawnedAt = Date.now();
     const client = new CodexAppServerClient(child, this.logger, () => this.traceContext());
     if (this.closed) {
       await client.dispose();
@@ -3484,10 +3487,14 @@ export class CodexAppServerAgentSession implements AgentSession {
     try {
       await client.request("initialize", buildCodexAppServerInitializeParams());
       client.notify("initialized", {});
+      const initializedAt = Date.now();
 
-      await this.loadResolvedWorkspaceWrite();
-      await this.loadCollaborationModes();
-      await this.loadSkills();
+      await Promise.all([
+        this.loadResolvedWorkspaceWrite(),
+        this.loadCollaborationModes(),
+        this.loadSkills(),
+      ]);
+      const bootstrappedAt = Date.now();
 
       if (this.currentThreadId) {
         await this.ensureThreadLoaded({
@@ -3500,6 +3507,17 @@ export class CodexAppServerAgentSession implements AgentSession {
         throw this.createClosedError();
       }
       this.connected = true;
+      const connectedAt = Date.now();
+      this.logger.info(
+        {
+          totalMs: connectedAt - startedAt,
+          spawnMs: spawnedAt - startedAt,
+          initializeMs: initializedAt - spawnedAt,
+          bootstrapMs: bootstrappedAt - initializedAt,
+          resumeMs: connectedAt - bootstrappedAt,
+        },
+        "provider.codex.session.connected",
+      );
     } catch (error) {
       try {
         if (this.client === client) {
@@ -6942,8 +6960,11 @@ export class CodexAppServerAgentSession implements AgentSession {
 export class CodexAppServerAgentClient implements AgentClient {
   readonly provider = CODEX_PROVIDER;
   readonly capabilities = CODEX_APP_SERVER_CAPABILITIES;
+  private versionOutputPromise: Promise<string> | null = null;
   private goalsEnabledPromise: Promise<boolean> | null = null;
   private autoReviewEnabledPromise: Promise<boolean> | null = null;
+  private availableUntil = 0;
+  private availabilityInFlight: Promise<boolean> | null = null;
 
   constructor(
     private readonly logger: Logger,
@@ -6965,8 +6986,7 @@ export class CodexAppServerAgentClient implements AgentClient {
     if (!this.goalsEnabledPromise) {
       this.goalsEnabledPromise = (async () => {
         try {
-          const launchPrefix = await resolveCodexLaunchPrefix(this.runtimeSettings);
-          const versionOutput = await resolveBinaryVersion(launchPrefix.command);
+          const versionOutput = await this.resolveVersionOutput();
           const enabled = codexVersionAtLeast(versionOutput, CODEX_GOALS_MIN_VERSION);
           this.logger.trace(
             {
@@ -6989,9 +7009,32 @@ export class CodexAppServerAgentClient implements AgentClient {
   private resolveAutoReviewEnabled(signal?: AbortSignal): Promise<boolean> {
     if (signal) return this.probeAutoReviewEnabled(signal);
     if (!this.autoReviewEnabledPromise) {
-      this.autoReviewEnabledPromise = this.probeAutoReviewEnabled();
+      this.autoReviewEnabledPromise = (async () => {
+        try {
+          const versionOutput = await this.resolveVersionOutput();
+          const enabled = codexVersionAtLeast(versionOutput, CODEX_AUTO_REVIEW_MIN_VERSION);
+          this.logger.trace(
+            { provider: CODEX_PROVIDER, versionOutput, enabled },
+            "provider.codex.config.auto_review_resolved",
+          );
+          return enabled;
+        } catch (error) {
+          this.logger.warn({ err: error }, "Failed to probe codex version for auto-review gate");
+          return false;
+        }
+      })();
     }
     return this.autoReviewEnabledPromise;
+  }
+
+  private resolveVersionOutput(): Promise<string> {
+    if (!this.versionOutputPromise) {
+      this.versionOutputPromise = (async () => {
+        const launchPrefix = await resolveCodexLaunchPrefix(this.runtimeSettings);
+        return resolveBinaryVersion(launchPrefix.command);
+      })();
+    }
+    return this.versionOutputPromise;
   }
 
   private async probeAutoReviewEnabled(signal?: AbortSignal): Promise<boolean> {
@@ -7043,6 +7086,14 @@ export class CodexAppServerAgentClient implements AgentClient {
     return child;
   }
 
+  async listFeatures(config: AgentSessionConfig): Promise<AgentFeature[]> {
+    return buildCodexFeatures({
+      modelId: config.model,
+      fastModeEnabled: config.featureValues?.fast_mode === true,
+      planModeEnabled: config.featureValues?.plan_mode === true,
+    });
+  }
+
   async createSession(
     config: AgentSessionConfig,
     launchContext?: AgentLaunchContext,
@@ -7056,8 +7107,10 @@ export class CodexAppServerAgentClient implements AgentClient {
       // utility generations through `codex exec --ephemeral` in a larger change.
     }
     const sessionConfig: AgentSessionConfig = { ...config, provider: CODEX_PROVIDER };
-    const goalsEnabled = await this.resolveGoalsEnabled();
-    const autoReviewEnabled = await this.resolveAutoReviewEnabled();
+    const [goalsEnabled, autoReviewEnabled] = await Promise.all([
+      this.resolveGoalsEnabled(),
+      this.resolveAutoReviewEnabled(),
+    ]);
     const session = new CodexAppServerAgentSession(
       sessionConfig,
       null,
@@ -7087,8 +7140,10 @@ export class CodexAppServerAgentClient implements AgentClient {
       provider: CODEX_PROVIDER,
       cwd: overrides?.cwd ?? storedConfig.cwd ?? process.cwd(),
     };
-    const goalsEnabled = await this.resolveGoalsEnabled();
-    const autoReviewEnabled = await this.resolveAutoReviewEnabled();
+    const [goalsEnabled, autoReviewEnabled] = await Promise.all([
+      this.resolveGoalsEnabled(),
+      this.resolveAutoReviewEnabled(),
+    ]);
     const session = new CodexAppServerAgentSession(
       merged,
       handle,
@@ -7289,9 +7344,29 @@ export class CodexAppServerAgentClient implements AgentClient {
   }
 
   async isAvailable(): Promise<boolean> {
-    const launch = await resolveCodexLaunch(this.runtimeSettings);
-    const availability = await checkCodexLaunchAvailable(launch);
-    return availability.available;
+    if (this.availableUntil > Date.now()) {
+      return true;
+    }
+    if (this.availabilityInFlight) {
+      return await this.availabilityInFlight;
+    }
+
+    const check = (async () => {
+      const launch = await resolveCodexLaunch(this.runtimeSettings);
+      const availability = await checkCodexLaunchAvailable(launch);
+      if (availability.available) {
+        this.availableUntil = Date.now() + CODEX_AVAILABILITY_CACHE_TTL_MS;
+      }
+      return availability.available;
+    })();
+    this.availabilityInFlight = check;
+    try {
+      return await check;
+    } finally {
+      if (this.availabilityInFlight === check) {
+        this.availabilityInFlight = null;
+      }
+    }
   }
 
   async getDiagnostic(): Promise<{ diagnostic: string }> {
