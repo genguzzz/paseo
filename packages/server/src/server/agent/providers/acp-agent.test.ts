@@ -125,7 +125,6 @@ interface ACPConfiguredOverrideInternals {
   availableModels: Array<{ modelId: string; name: string; description?: string | null }> | null;
   currentMode: string | null;
   currentModel: string | null;
-  thinkingOptionId: string | null;
   applyConfiguredOverrides(): Promise<void>;
 }
 
@@ -183,7 +182,6 @@ function createSessionWithConfig(
     provider?: string;
     modeId?: string | null;
     model?: string | null;
-    thinkingOptionId?: string | null;
     featureValues?: Record<string, unknown>;
   } = {},
   logger: ReturnType<typeof createTestLogger> = createTestLogger(),
@@ -194,7 +192,6 @@ function createSessionWithConfig(
       cwd: "/tmp/paseo-acp-test",
       modeId: config.modeId ?? undefined,
       model: config.model ?? undefined,
-      thinkingOptionId: config.thinkingOptionId ?? undefined,
       featureValues: config.featureValues,
     },
     {
@@ -2478,38 +2475,6 @@ describe("ACPAgentSession slash commands", () => {
 });
 
 describe("ACPAgentSession", () => {
-  test("adopt applies model and thinking overrides against the prewarmed session state", async () => {
-    const session = createSessionWithConfig();
-    const options = [selectConfigOption("thought_level", ["low", "high"], "high")];
-    const { internals, unstableSetSessionModel, setSessionConfigOption } =
-      prepareConfiguredOverrideSession(session, {
-        currentModel: "warm-default",
-        availableModels: [
-          { modelId: "warm-default", name: "Warm default" },
-          { modelId: "requested-model", name: "Requested model" },
-        ],
-        configOptions: options,
-      });
-    internals.thinkingOptionId = "high";
-
-    await session.adopt({
-      provider: "claude-acp",
-      cwd: "/tmp/paseo-acp-test",
-      model: "requested-model",
-      thinkingOptionId: "low",
-    });
-
-    expect(unstableSetSessionModel).toHaveBeenCalledWith({
-      sessionId: "session-1",
-      modelId: "requested-model",
-    });
-    expect(setSessionConfigOption).toHaveBeenCalledWith({
-      sessionId: "session-1",
-      configId: "thought_level-option",
-      value: "low",
-    });
-  });
-
   test("drops MCP servers from ACP requests when the provider does not support MCP", () => {
     const session = new ACPAgentSession(
       {
