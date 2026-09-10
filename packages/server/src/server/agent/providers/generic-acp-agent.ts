@@ -56,8 +56,6 @@ interface GenericACPAgentClientOptions {
   prewarm?: {
     cwd: string;
     count: number;
-    model?: string;
-    thinkingOptionId?: string;
   };
 }
 
