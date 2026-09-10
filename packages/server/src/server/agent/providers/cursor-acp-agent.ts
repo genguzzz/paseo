@@ -17,11 +17,6 @@ const CURSOR_INITIAL_COMMANDS_WAIT_TIMEOUT_MS = 200;
 const CURSOR_CLIENT_CAPABILITY_META = {
   parameterizedModelPicker: true,
 };
-const CURSOR_ACP_PREWARM_CWD = process.env.PASEO_CURSOR_ACP_PREWARM_CWD?.trim();
-const CURSOR_ACP_PREWARM_COUNT = Number.parseInt(
-  process.env.PASEO_CURSOR_ACP_PREWARM_COUNT ?? "0",
-  10,
-);
 
 export const CURSOR_FAST_FEATURE_OPTION: ACPConfigFeatureOption = {
   id: "fast",
@@ -81,10 +76,6 @@ export class CursorACPAgentClient extends GenericACPAgentClient {
       initialCommandsWaitTimeoutMs: CURSOR_INITIAL_COMMANDS_WAIT_TIMEOUT_MS,
       clientCapabilityMeta: CURSOR_CLIENT_CAPABILITY_META,
       configFeatureOptions: [CURSOR_FAST_FEATURE_OPTION],
-      prewarm:
-        CURSOR_ACP_PREWARM_CWD && Number.isFinite(CURSOR_ACP_PREWARM_COUNT)
-          ? { cwd: CURSOR_ACP_PREWARM_CWD, count: CURSOR_ACP_PREWARM_COUNT }
-          : undefined,
     });
   }
 
