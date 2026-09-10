@@ -22,8 +22,6 @@ const CURSOR_ACP_PREWARM_COUNT = Number.parseInt(
   process.env.PASEO_CURSOR_ACP_PREWARM_COUNT ?? "0",
   10,
 );
-const CURSOR_ACP_PREWARM_MODEL = process.env.PASEO_CURSOR_ACP_PREWARM_MODEL?.trim();
-const CURSOR_ACP_PREWARM_THINKING = process.env.PASEO_CURSOR_ACP_PREWARM_THINKING?.trim();
 
 export const CURSOR_FAST_FEATURE_OPTION: ACPConfigFeatureOption = {
   id: "fast",
@@ -85,12 +83,7 @@ export class CursorACPAgentClient extends GenericACPAgentClient {
       configFeatureOptions: [CURSOR_FAST_FEATURE_OPTION],
       prewarm:
         CURSOR_ACP_PREWARM_CWD && Number.isFinite(CURSOR_ACP_PREWARM_COUNT)
-          ? {
-              cwd: CURSOR_ACP_PREWARM_CWD,
-              count: CURSOR_ACP_PREWARM_COUNT,
-              model: CURSOR_ACP_PREWARM_MODEL || undefined,
-              thinkingOptionId: CURSOR_ACP_PREWARM_THINKING || undefined,
-            }
+          ? { cwd: CURSOR_ACP_PREWARM_CWD, count: CURSOR_ACP_PREWARM_COUNT }
           : undefined,
     });
   }
