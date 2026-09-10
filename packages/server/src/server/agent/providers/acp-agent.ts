@@ -447,6 +447,8 @@ interface ACPAgentClientOptions {
   prewarm?: {
     cwd: string;
     count: number;
+    model?: string;
+    thinkingOptionId?: string;
   };
 }
 
@@ -926,7 +928,12 @@ export class ACPAgentClient implements AgentClient {
   private readonly featureProbeCacheTtlMs: number;
   private readonly now: () => number;
   protected readonly terminateProcess: ProcessTerminator;
-  private readonly prewarm?: { cwd: string; count: number };
+  private readonly prewarm?: {
+    cwd: string;
+    count: number;
+    model?: string;
+    thinkingOptionId?: string;
+  };
 
   constructor(options: ACPAgentClientOptions) {
     this.provider = options.provider;
@@ -1053,7 +1060,12 @@ export class ACPAgentClient implements AgentClient {
   }
 
   private async createPrewarmedSession(cwd: string): Promise<ACPAgentSession> {
-    const session = this.createSessionInstance({ provider: this.provider, cwd });
+    const session = this.createSessionInstance({
+      provider: this.provider,
+      cwd,
+      model: this.prewarm?.model,
+      thinkingOptionId: this.prewarm?.thinkingOptionId,
+    });
     await session.initializeNewSession();
     return session;
   }
