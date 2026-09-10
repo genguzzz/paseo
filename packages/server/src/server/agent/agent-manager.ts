@@ -4996,7 +4996,11 @@ export class AgentManager {
       normalized.model = trimmed.length > 0 && trimmed !== "default" ? trimmed : undefined;
     }
 
-    const shouldResolveDefaultModel = options.resolveDefaultModel ?? true;
+    // Cursor returns its effective model as part of the real ACP session/new
+    // response. Probing the catalog here would start a second ACP process
+    // before createSession starts the process that will actually serve turns.
+    const shouldResolveDefaultModel =
+      (options.resolveDefaultModel ?? true) && normalized.provider !== "cursor";
     if (shouldResolveDefaultModel && !normalized.model) {
       const defaultModelId = await this.resolveDefaultModelId(normalized);
       if (defaultModelId) {

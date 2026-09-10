@@ -1741,6 +1741,31 @@ test("normalizeConfig injects the provider default model while leaving mode omit
   expect(snapshot.config.modeId).toBeUndefined();
 });
 
+test("normalizeConfig does not probe Cursor for a duplicate default model", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-cursor-default-test-"));
+  class CursorClient extends TestAgentClient {
+    fetchCatalogCalls = 0;
+
+    constructor() {
+      super("cursor");
+    }
+
+    override async fetchCatalog() {
+      this.fetchCatalogCalls += 1;
+      return await super.fetchCatalog();
+    }
+  }
+  const client = new CursorClient();
+  const manager = new AgentManager({ clients: { cursor: client }, logger });
+
+  const snapshot = await manager.createAgent({ provider: "cursor", cwd: workdir }, undefined, {
+    workspaceId: undefined,
+  });
+
+  expect(client.fetchCatalogCalls).toBe(0);
+  expect(snapshot.config.model).toBeUndefined();
+});
+
 test("normalizeConfig leaves Claude mode omitted", async () => {
   const workdir = mkdtempSync(join(tmpdir(), "agent-manager-claude-default-test-"));
   const manager = new AgentManager({
