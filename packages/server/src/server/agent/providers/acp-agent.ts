@@ -2868,8 +2868,14 @@ export class ACPAgentSession implements AgentSession, ACPClient {
   }
 
   private async applyConfiguredOverrides(): Promise<void> {
+    const startedAt = Date.now();
+    let modeApplied = false;
+    let modelApplied = false;
+    let thinkingApplied = false;
+    let featureCount = 0;
     const configuredModeId = this.config.modeId;
     if (configuredModeId && configuredModeId !== this.currentMode) {
+      modeApplied = true;
       const selection = resolveACPModeSelection({
         modeId: configuredModeId,
         availableModes: this.availableModes,
@@ -2877,8 +2883,10 @@ export class ACPAgentSession implements AgentSession, ACPClient {
       });
       await this.setModeWithSelection({ modeId: configuredModeId, selection });
     }
+    const modeFinishedAt = Date.now();
     const configuredModelId = this.config.model;
     if (configuredModelId && configuredModelId !== this.currentModel) {
+      modelApplied = true;
       const selection = resolveACPModelSelection({
         modelId: configuredModelId,
         availableModels: this.availableModels,
@@ -2896,16 +2904,37 @@ export class ACPAgentSession implements AgentSession, ACPClient {
         );
       }
     }
+    const modelFinishedAt = Date.now();
     if (this.config.thinkingOptionId && this.config.thinkingOptionId !== this.thinkingOptionId) {
+      thinkingApplied = true;
       await this.setThinkingOption(this.config.thinkingOptionId);
     }
+    const thinkingFinishedAt = Date.now();
     const configuredFeatureValues = this.config.featureValues ?? {};
     for (const featureOption of this.configFeatureOptions) {
       if (!Object.prototype.hasOwnProperty.call(configuredFeatureValues, featureOption.id)) {
         continue;
       }
       await this.setFeature(featureOption.id, configuredFeatureValues[featureOption.id]);
+      featureCount += 1;
     }
+    const finishedAt = Date.now();
+    this.logger.info(
+      {
+        agentId: this.agentId,
+        provider: this.provider,
+        totalMs: finishedAt - startedAt,
+        modeMs: modeFinishedAt - startedAt,
+        modelMs: modelFinishedAt - modeFinishedAt,
+        thinkingMs: thinkingFinishedAt - modelFinishedAt,
+        featuresMs: finishedAt - thinkingFinishedAt,
+        modeApplied,
+        modelApplied,
+        thinkingApplied,
+        featureCount,
+      },
+      "provider.acp.session.overrides_applied",
+    );
   }
 
   private warnInvalidSelection(value: string, message: string): void {
