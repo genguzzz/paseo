@@ -244,10 +244,26 @@ function getCursorACPCommand(
     runtimeSettings?.command?.mode === "replace" &&
     isNonEmptyStringArray(runtimeSettings.command.argv)
   ) {
-    return runtimeSettings.command.argv;
+    return addCursorLocalMetadataHeader(runtimeSettings.command.argv);
   }
 
-  return ["cursor-agent", "acp"];
+  // Mark ACP startup metadata as local so cursor-byok can answer optional
+  // discovery calls without forwarding them to Cursor's upstream service.
+  return addCursorLocalMetadataHeader(["cursor-agent", "acp"]);
+}
+
+function addCursorLocalMetadataHeader(command: [string, ...string[]]): [string, ...string[]] {
+  if (command[0].endsWith("cursor-agent") && !command.includes("x-cursor-byok-local-metadata: 1")) {
+    const acpIndex = command.indexOf("acp");
+    const insertAt = acpIndex >= 0 ? acpIndex : command.length;
+    return [
+      ...command.slice(0, insertAt),
+      "--header",
+      "x-cursor-byok-local-metadata: 1",
+      ...command.slice(insertAt),
+    ] as [string, ...string[]];
+  }
+  return command;
 }
 
 function getProviderClientFactory(provider: string): ProviderClientFactory {
@@ -771,7 +787,8 @@ function addDerivedProviders(
         throw new Error(`ACP provider '${providerId}' requires a command`);
       }
       // Capture command in const for closure - TypeScript can't track type refinement inside closures
-      const command = override.command;
+      const command =
+        providerId === "cursor" ? addCursorLocalMetadataHeader(override.command) : override.command;
 
       resolvedProviders.set(providerId, {
         definition: createDerivedDefinition(
