@@ -3544,6 +3544,40 @@ test("createAgent reports available providers when selected provider is unavaila
   );
 });
 
+test("createAgent does not run a redundant Cursor availability probe before session creation", async () => {
+  const workdir = mkdtempSync(join(tmpdir(), "agent-manager-test-"));
+  const storage = new AgentStorage(join(workdir, "agents"), logger);
+
+  class CursorClient extends TestAgentClient {
+    availabilityCalls = 0;
+    createSessionCalls = 0;
+
+    override async isAvailable(): Promise<boolean> {
+      this.availabilityCalls += 1;
+      return true;
+    }
+
+    override async createSession(config: AgentSessionConfig): Promise<AgentSession> {
+      this.createSessionCalls += 1;
+      return await super.createSession(config);
+    }
+  }
+
+  const client = new CursorClient("cursor");
+  const manager = new AgentManager({
+    clients: { cursor: client },
+    registry: storage,
+    logger,
+  });
+
+  await manager.createAgent({ provider: "cursor", cwd: workdir }, undefined, {
+    workspaceId: undefined,
+  });
+
+  expect(client.availabilityCalls).toBe(0);
+  expect(client.createSessionCalls).toBe(1);
+});
+
 test("createAgent rejects a disabled provider without creating a session", async () => {
   const workdir = mkdtempSync(join(tmpdir(), "agent-manager-test-"));
   const storagePath = join(workdir, "agents");

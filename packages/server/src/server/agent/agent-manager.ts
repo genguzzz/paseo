@@ -1229,9 +1229,13 @@ export class AgentManager {
     );
     const preparedAt = Date.now();
     this.requireEnabledProvider(storedConfig.provider);
-    const client = await this.requireAvailableClient({
-      provider: storedConfig.provider,
-    });
+    // Cursor's availability check executes `cursor-agent --version`, then
+    // createSession immediately launches `cursor-agent acp`. Let the real spawn
+    // be the authoritative check so every new session does not pay for both.
+    const client =
+      storedConfig.provider === "cursor"
+        ? this.requireClient(storedConfig.provider)
+        : await this.requireAvailableClient({ provider: storedConfig.provider });
     const availableAt = Date.now();
     this.paseoToolPolicies.set(resolvedAgentId, paseoToolPolicy);
     const launchContext = await this.buildLaunchContext(
