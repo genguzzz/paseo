@@ -173,4 +173,35 @@ describe("CursorACPAgentClient model discovery", () => {
       },
     ]);
   });
+
+  test("lists Cursor features without starting an ACP probe", async () => {
+    class NoProbeCursorACPAgentClient extends CursorACPAgentClient {
+      protected override async spawnProcess(): Promise<SpawnedACPProcess> {
+        throw new Error("feature listing must not spawn cursor-agent");
+      }
+    }
+
+    const client = new NoProbeCursorACPAgentClient({
+      logger: createTestLogger(),
+      command: ["cursor-agent", "acp"],
+    });
+
+    await expect(
+      client.listFeatures({
+        provider: "acp",
+        cwd: "/tmp/cursor",
+        featureValues: { auto_accept: true, fast: "true" },
+      }),
+    ).resolves.toEqual([
+      expect.objectContaining({ id: "auto_accept", value: true }),
+      expect.objectContaining({
+        id: "fast",
+        value: "true",
+        options: [
+          expect.objectContaining({ id: "false", isDefault: false }),
+          expect.objectContaining({ id: "true", isDefault: true }),
+        ],
+      }),
+    ]);
+  });
 });

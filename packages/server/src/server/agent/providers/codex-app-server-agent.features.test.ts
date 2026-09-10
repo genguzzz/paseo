@@ -2,7 +2,7 @@ import pino from "pino";
 import { describe, expect, test } from "vitest";
 
 import type { AgentSession, AgentSessionConfig } from "../agent-sdk-types.js";
-import { CodexAppServerAgentSession } from "./codex-app-server-agent.js";
+import { CodexAppServerAgentClient, CodexAppServerAgentSession } from "./codex-app-server-agent.js";
 import {
   createFakeCodexAppServer,
   type FakeCodexAppServer,
@@ -177,6 +177,22 @@ describe("Codex app-server provider features", () => {
     } finally {
       await session.close();
     }
+  });
+
+  test("lists draft features without starting an app-server session", async () => {
+    const client = new CodexAppServerAgentClient(createTestLogger());
+
+    await expect(
+      client.listFeatures({
+        provider: CODEX_PROVIDER,
+        cwd: "/tmp/codex-fast-mode-test",
+        model: "gpt-5.4",
+        featureValues: { fast_mode: true, plan_mode: true },
+      }),
+    ).resolves.toEqual([
+      expect.objectContaining({ id: "fast_mode", value: true }),
+      expect.objectContaining({ id: "plan_mode", value: true }),
+    ]);
   });
 
   test("features returns fast and plan toggles when supported", async () => {

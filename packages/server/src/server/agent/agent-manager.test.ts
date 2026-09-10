@@ -2026,7 +2026,7 @@ test("listDraftFeatures uses client feature listing without a model", async () =
 
   expect(client.fetchCatalogCalls).toBe(0);
   expect(client.createSessionCalls).toBe(0);
-  expect(client.availabilityCalls).toBe(1);
+  expect(client.availabilityCalls).toBe(0);
   expect(client.featureConfigs).toEqual([
     {
       provider: "codex",

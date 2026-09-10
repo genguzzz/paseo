@@ -1195,6 +1195,57 @@ describe("ProviderSnapshotManager public surface", () => {
     }
   });
 
+  test("resolveCreateConfig skips catalog discovery for a top-level interactive create", async () => {
+    const resolverInputs: ResolveAgentCreateConfigInput[] = [];
+    const isAvailable = vi.fn().mockResolvedValue(true);
+    const fetchCatalog = vi.fn().mockResolvedValue({ models: [], modes: [] });
+    const manager = new ProviderSnapshotManager({
+      logger: createTestLogger(),
+      providerOverrides: {
+        claude: { enabled: false },
+        copilot: { enabled: false },
+        opencode: { enabled: false },
+        pi: { enabled: false },
+      },
+      extraClients: {
+        codex: createExtraClient("codex", {
+          isAvailable,
+          fetchCatalog,
+          resolveCreateConfig(input) {
+            resolverInputs.push(input);
+            return { modeId: input.requestedMode, featureValues: input.featureValues };
+          },
+        }),
+      },
+    });
+    try {
+      await expect(
+        manager.resolveCreateConfig({
+          cwd: "/tmp/project",
+          provider: "codex",
+          requestedMode: "full-access",
+          featureValues: { fast_mode: true },
+          parent: null,
+          unattended: false,
+        }),
+      ).resolves.toEqual({ modeId: "full-access", featureValues: { fast_mode: true } });
+      expect(isAvailable).not.toHaveBeenCalled();
+      expect(fetchCatalog).not.toHaveBeenCalled();
+      expect(resolverInputs).toEqual([
+        {
+          provider: "codex",
+          requestedMode: "full-access",
+          featureValues: { fast_mode: true },
+          parent: null,
+          unattended: false,
+          availableModes: undefined,
+        },
+      ]);
+    } finally {
+      manager.destroy();
+    }
+  });
+
   test("resolveCreateConfig reduces a managed parent to provider mode and unattended data", async () => {
     const resolverInputs: ResolveAgentCreateConfigInput[] = [];
     const childModes: AgentMode[] = [

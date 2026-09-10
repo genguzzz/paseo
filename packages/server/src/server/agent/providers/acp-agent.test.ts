@@ -2014,6 +2014,57 @@ describe("ACPAgentClient config features", () => {
       }),
     ]);
   });
+  test("coalesces concurrent feature probes and reuses successful results until expiry", async () => {
+    let now = 0;
+    let spawnCount = 0;
+    let releaseFirstSpawn!: () => void;
+    const firstSpawnGate = new Promise<void>((resolve) => {
+      releaseFirstSpawn = resolve;
+    });
+
+    class TestACPAgentClient extends ACPAgentClient {
+      protected override async spawnProcess(): Promise<SpawnedACPProcess> {
+        spawnCount += 1;
+        if (spawnCount === 1) await firstSpawnGate;
+        return {
+          child: { kill: vi.fn(), exitCode: 0, signalCode: null, once: vi.fn() },
+          connection: {
+            newSession: vi.fn().mockResolvedValue({
+              sessionId: `session-${spawnCount}`,
+              configOptions: [copilotAgentConfigOption("Probe Agent")],
+            }),
+          },
+          initialize: { agentCapabilities: {} },
+        } as SpawnedACPProcess;
+      }
+
+      protected override async closeProbe(): Promise<void> {}
+    }
+
+    const client = new TestACPAgentClient({
+      provider: "copilot",
+      logger: createTestLogger(),
+      defaultCommand: ["copilot", "--acp"],
+      configFeatureOptions: [COPILOT_AGENT_FEATURE_OPTION],
+      featureProbeCacheTtlMs: 1_000,
+      now: () => now,
+    });
+    const config = { provider: "copilot", cwd: "/tmp/acp-features" };
+
+    const first = client.listFeatures(config);
+    const concurrent = client.listFeatures(config);
+    await vi.waitFor(() => expect(spawnCount).toBe(1));
+    releaseFirstSpawn();
+    await expect(Promise.all([first, concurrent])).resolves.toHaveLength(2);
+    expect(spawnCount).toBe(1);
+
+    await client.listFeatures(config);
+    expect(spawnCount).toBe(1);
+
+    now = 1_001;
+    await client.listFeatures(config);
+    expect(spawnCount).toBe(2);
+  });
 });
 
 describe("ACPAgentClient sessionResponseTransformer", () => {

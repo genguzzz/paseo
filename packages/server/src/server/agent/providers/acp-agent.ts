@@ -441,6 +441,7 @@ interface ACPAgentClientOptions {
   extensionCommandsParser?: ACPExtensionCommandsParser;
   waitForInitialCommands?: boolean;
   initialCommandsWaitTimeoutMs?: number;
+  featureProbeCacheTtlMs?: number;
   terminateProcess?: ProcessTerminator;
   now?: () => number;
 }
@@ -819,7 +820,7 @@ function isACPAutoAcceptEnabled(config: AgentSessionConfig): boolean {
   return config.featureValues?.[ACP_AUTO_ACCEPT_FEATURE_ID] === true;
 }
 
-function buildACPAutoAcceptFeature(config: AgentSessionConfig): AgentFeature {
+export function buildACPAutoAcceptFeature(config: AgentSessionConfig): AgentFeature {
   return {
     type: "toggle",
     id: ACP_AUTO_ACCEPT_FEATURE_ID,
@@ -865,6 +866,14 @@ function isACPCreateConfigUnattended(input: AgentCreateConfigUnattendedInput): b
   );
 }
 
+interface ACPFeatureProbeCacheEntry {
+  configOptions?: SessionConfigOption[];
+  expiresAt: number;
+  inFlight?: Promise<SessionConfigOption[]>;
+}
+
+const DEFAULT_ACP_FEATURE_PROBE_CACHE_TTL_MS = 5 * 60_000;
+
 export class ACPAgentClient implements AgentClient {
   readonly provider: string;
   readonly capabilities: AgentCapabilityFlags;
@@ -903,6 +912,8 @@ export class ACPAgentClient implements AgentClient {
   private readonly initialCommandsWaitTimeoutMs: number;
   private readonly extensionCommandsParser?: ACPExtensionCommandsParser;
   private readonly importPromptCache = new Map<string, ACPImportPromptCacheEntry>();
+  private readonly featureProbeCache = new Map<string, ACPFeatureProbeCacheEntry>();
+  private readonly featureProbeCacheTtlMs: number;
   private readonly now: () => number;
   protected readonly terminateProcess: ProcessTerminator;
 
@@ -932,6 +943,8 @@ export class ACPAgentClient implements AgentClient {
     this.waitForInitialCommands = options.waitForInitialCommands ?? false;
     this.initialCommandsWaitTimeoutMs = options.initialCommandsWaitTimeoutMs ?? 1500;
     this.extensionCommandsParser = options.extensionCommandsParser;
+    this.featureProbeCacheTtlMs =
+      options.featureProbeCacheTtlMs ?? DEFAULT_ACP_FEATURE_PROBE_CACHE_TTL_MS;
     this.now = options.now ?? Date.now;
   }
 
@@ -1127,21 +1140,56 @@ export class ACPAgentClient implements AgentClient {
     }
 
     this.assertProvider(config);
+    const configOptions = await this.getFeatureProbeConfigOptions(config.cwd);
+    return [autoAcceptFeature, ...deriveFeaturesFromACP(configOptions, this.configFeatureOptions)];
+  }
+
+  private async getFeatureProbeConfigOptions(cwd: string): Promise<SessionConfigOption[]> {
+    const cached = this.featureProbeCache.get(cwd);
+    if (cached?.configOptions && cached.expiresAt > this.now()) {
+      return cached.configOptions;
+    }
+    if (cached?.inFlight) {
+      return await cached.inFlight;
+    }
+
+    const inFlight = this.probeFeatureConfigOptions(cwd);
+    const entry: ACPFeatureProbeCacheEntry = {
+      configOptions: cached?.configOptions,
+      expiresAt: cached?.expiresAt ?? 0,
+      inFlight,
+    };
+    this.featureProbeCache.set(cwd, entry);
+
+    try {
+      const configOptions = await inFlight;
+      if (this.featureProbeCache.get(cwd) === entry) {
+        this.featureProbeCache.set(cwd, {
+          configOptions,
+          expiresAt: this.now() + this.featureProbeCacheTtlMs,
+        });
+      }
+      return configOptions;
+    } catch (error) {
+      if (this.featureProbeCache.get(cwd) === entry) {
+        this.featureProbeCache.delete(cwd);
+      }
+      throw error;
+    }
+  }
+
+  private async probeFeatureConfigOptions(cwd: string): Promise<SessionConfigOption[]> {
     const probe = await this.spawnProcess(PROBE_ENV);
     let probeSessionId: string | null = null;
     try {
       const response = await this.runACPRequest(() =>
         probe.connection.newSession({
-          cwd: config.cwd,
+          cwd,
           mcpServers: [],
         }),
       );
       probeSessionId = response.sessionId;
-      const transformed = this.transformSessionResponse(response);
-      return [
-        autoAcceptFeature,
-        ...deriveFeaturesFromACP(transformed.configOptions, this.configFeatureOptions),
-      ];
+      return this.transformSessionResponse(response).configOptions ?? [];
     } finally {
       await this.closeProbe(probe, probeSessionId);
     }
@@ -1728,8 +1776,10 @@ export class ACPAgentSession implements AgentSession, ACPClient {
   }
 
   async initializeNewSession(): Promise<void> {
+    const startedAt = Date.now();
     try {
       const spawned = await this.spawnProcess();
+      const spawnedAt = Date.now();
       this.child = spawned.child;
       this.connection = spawned.connection;
       this.agentCapabilities = spawned.initialize.agentCapabilities ?? null;
@@ -1740,10 +1790,23 @@ export class ACPAgentSession implements AgentSession, ACPClient {
           mcpServers: this.acpMcpServers(),
         }),
       );
+      const sessionCreatedAt = Date.now();
       this.sessionId = response.sessionId;
       this.bootstrapThreadEventPending = true;
       this.applySessionState(response);
       await this.applyConfiguredOverrides();
+      const configuredAt = Date.now();
+      this.logger.info(
+        {
+          agentId: this.agentId,
+          provider: this.provider,
+          totalMs: configuredAt - startedAt,
+          spawnAndInitializeMs: spawnedAt - startedAt,
+          newSessionMs: sessionCreatedAt - spawnedAt,
+          configuredOverridesMs: configuredAt - sessionCreatedAt,
+        },
+        "provider.acp.session.initialized",
+      );
     } catch (error) {
       await this.closeAfterInitializationFailure(error);
     }

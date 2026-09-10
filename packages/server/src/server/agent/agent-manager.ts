@@ -1109,15 +1109,15 @@ export class AgentManager {
     if (!normalizedConfig.model && !client.listFeatures) {
       return [];
     }
+    if (client.listFeatures) {
+      return await client.listFeatures(normalizedConfig);
+    }
+
     const available = await client.isAvailable();
     if (!available) {
       throw new Error(
         `Provider '${normalizedConfig.provider}' is not available. Please ensure the CLI is installed.`,
       );
-    }
-
-    if (client.listFeatures) {
-      return await client.listFeatures(normalizedConfig);
     }
 
     const session = await client.createSession(normalizedConfig);
@@ -1210,6 +1210,7 @@ export class AgentManager {
     agentId: string | undefined,
     options: CreateAgentOptions,
   ): Promise<ManagedAgent> {
+    const startedAt = Date.now();
     this.assertAcceptingAgentRegistrations();
     const resolvedAgentId = validateAgentId(agentId ?? this.idFactory(), "createAgent");
     if (this.pluginLifecycle && !config.internal) {
@@ -1226,10 +1227,12 @@ export class AgentManager {
       resolvedAgentId,
       options?.env,
     );
+    const preparedAt = Date.now();
     this.requireEnabledProvider(storedConfig.provider);
     const client = await this.requireAvailableClient({
       provider: storedConfig.provider,
     });
+    const availableAt = Date.now();
     this.paseoToolPolicies.set(resolvedAgentId, paseoToolPolicy);
     const launchContext = await this.buildLaunchContext(
       resolvedAgentId,
@@ -1239,9 +1242,11 @@ export class AgentManager {
       options?.env,
       { reason: "create", purpose: "interactive", workspaceId: options.workspaceId ?? null },
     );
+    const launchContextBuiltAt = Date.now();
     const providerLaunchConfig = this.resolveProviderLaunchConfig(launchConfig, launchContext);
     const createOptions = this.buildCreateSessionOptions(options);
     const session = await client.createSession(providerLaunchConfig, launchContext, createOptions);
+    const sessionCreatedAt = Date.now();
     await this.requireExternalMcpSupport(session, storedConfig);
     const agent = await this.registerSession(session, storedConfig, resolvedAgentId, {
       labels: options.labels,
@@ -1250,6 +1255,20 @@ export class AgentManager {
       owner: options.owner,
       historyPrimed: true,
     });
+    const registeredAt = Date.now();
+    this.logger.info(
+      {
+        agentId: resolvedAgentId,
+        provider: storedConfig.provider,
+        totalMs: registeredAt - startedAt,
+        prepareMs: preparedAt - startedAt,
+        availabilityMs: availableAt - preparedAt,
+        launchContextMs: launchContextBuiltAt - availableAt,
+        providerSessionMs: sessionCreatedAt - launchContextBuiltAt,
+        registrationMs: registeredAt - sessionCreatedAt,
+      },
+      "agent.create.completed",
+    );
     if (!agent.internal) {
       this.pluginLifecycle?.emit("agent.created", {
         agent: describeHookAgent({ ...agent, title: agent.config.title }),
