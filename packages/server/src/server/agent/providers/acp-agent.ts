@@ -444,6 +444,10 @@ interface ACPAgentClientOptions {
   featureProbeCacheTtlMs?: number;
   terminateProcess?: ProcessTerminator;
   now?: () => number;
+  prewarm?: {
+    cwd: string;
+    count: number;
+  };
 }
 
 interface ACPAgentSessionOptions {
@@ -478,6 +482,12 @@ interface ACPAgentSessionOptions {
   initialCommandsWaitTimeoutMs?: number;
   terminateProcess?: ProcessTerminator;
 }
+
+interface ACPWarmSlot {
+  promise: Promise<ACPAgentSession>;
+}
+
+const ACP_PREWARM_POOLS = new Map<string, ACPWarmSlot[]>();
 
 export interface SpawnedACPProcess {
   child: ChildProcessWithoutNullStreams;
@@ -916,6 +926,7 @@ export class ACPAgentClient implements AgentClient {
   private readonly featureProbeCacheTtlMs: number;
   private readonly now: () => number;
   protected readonly terminateProcess: ProcessTerminator;
+  private readonly prewarm?: { cwd: string; count: number };
 
   constructor(options: ACPAgentClientOptions) {
     this.provider = options.provider;
@@ -946,6 +957,10 @@ export class ACPAgentClient implements AgentClient {
     this.featureProbeCacheTtlMs =
       options.featureProbeCacheTtlMs ?? DEFAULT_ACP_FEATURE_PROBE_CACHE_TTL_MS;
     this.now = options.now ?? Date.now;
+    this.prewarm = options.prewarm;
+    if (this.prewarm && this.prewarm.count > 0 && this.prewarm.cwd.trim()) {
+      this.ensurePrewarmedSessions(this.prewarm.cwd, this.prewarm.count);
+    }
   }
 
   async createSession(
@@ -953,7 +968,27 @@ export class ACPAgentClient implements AgentClient {
     launchContext?: AgentLaunchContext,
   ): Promise<AgentSession> {
     this.assertProvider(config);
-    const session = new ACPAgentSession(
+    const warm = this.takePrewarmedSession(config.cwd);
+    if (warm) {
+      try {
+        const session = await warm;
+        await session.adopt({ ...config, provider: this.provider }, launchContext);
+        return session;
+      } catch (error) {
+        this.logger.warn({ err: error }, "Cursor ACP prewarmed session failed; using cold spawn");
+      }
+    }
+
+    const session = this.createSessionInstance(config, launchContext);
+    await session.initializeNewSession();
+    return session;
+  }
+
+  private createSessionInstance(
+    config: AgentSessionConfig,
+    launchContext?: AgentLaunchContext,
+  ): ACPAgentSession {
+    return new ACPAgentSession(
       { ...config, provider: this.provider },
       {
         provider: this.provider,
@@ -980,6 +1015,45 @@ export class ACPAgentClient implements AgentClient {
         initialCommandsWaitTimeoutMs: this.initialCommandsWaitTimeoutMs,
       },
     );
+  }
+
+  private prewarmKey(cwd: string): string {
+    return JSON.stringify({ provider: this.provider, command: this.defaultCommand, cwd });
+  }
+
+  private ensurePrewarmedSessions(cwd: string, count: number): void {
+    const key = this.prewarmKey(cwd);
+    const pool = ACP_PREWARM_POOLS.get(key) ?? [];
+    ACP_PREWARM_POOLS.set(key, pool);
+    while (pool.length < count) {
+      const promise = this.createPrewarmedSession(cwd);
+      const slot = { promise } satisfies ACPWarmSlot;
+      pool.push(slot);
+      void promise.then(
+        () => this.logger.info({ cwd }, "Cursor ACP prewarmed session ready"),
+        (error) => {
+          const index = pool.indexOf(slot);
+          if (index >= 0) pool.splice(index, 1);
+          this.logger.warn({ err: error, cwd }, "Cursor ACP prewarm failed");
+          this.ensurePrewarmedSessions(cwd, count);
+        },
+      );
+    }
+  }
+
+  private takePrewarmedSession(cwd: string): Promise<ACPAgentSession> | null {
+    const pool = ACP_PREWARM_POOLS.get(this.prewarmKey(cwd));
+    const slot = pool?.shift();
+    if (!slot) return null;
+    const count = this.prewarm?.count ?? 0;
+    if (count > 0) {
+      this.ensurePrewarmedSessions(cwd, count);
+    }
+    return slot.promise;
+  }
+
+  private async createPrewarmedSession(cwd: string): Promise<ACPAgentSession> {
+    const session = this.createSessionInstance({ provider: this.provider, cwd });
     await session.initializeNewSession();
     return session;
   }
@@ -1699,8 +1773,8 @@ export class ACPAgentSession implements AgentSession, ACPClient {
     sessionId: string,
     thinkingOptionId: string,
   ) => Promise<void>;
-  private readonly agentId?: string;
-  private readonly launchEnv?: Record<string, string>;
+  private agentId?: string;
+  private launchEnv?: Record<string, string>;
   private readonly subscribers = new Set<(event: AgentStreamEvent) => void>();
   private readonly pendingPermissions = new Map<string, PendingPermission>();
   private pendingUserMessage: PendingUserMessage | null = null;
@@ -1710,7 +1784,7 @@ export class ACPAgentSession implements AgentSession, ACPClient {
   private readonly persistedHistory: AgentTimelineItem[] = [];
   private readonly initialHandle?: AgentPersistenceHandle;
 
-  private readonly config: AgentSessionConfig;
+  private config: AgentSessionConfig;
   private child: ChildProcessWithoutNullStreams | null = null;
   private connection: ClientSideConnection | null = null;
   private agentCapabilities: ACPAgentCapabilities | null = null;
@@ -1773,6 +1847,21 @@ export class ACPAgentSession implements AgentSession, ACPClient {
 
   get id(): string | null {
     return this.sessionId;
+  }
+
+  async adopt(config: AgentSessionConfig, launchContext?: AgentLaunchContext): Promise<void> {
+    if (this.closed || !this.connection || !this.sessionId) {
+      throw new Error(`${this.provider} prewarmed session is no longer available`);
+    }
+    this.config = { ...config, provider: this.provider };
+    this.agentId = launchContext?.agentId;
+    this.launchEnv = launchContext?.env;
+    this.currentMode = config.modeId ?? this.currentMode;
+    this.currentModel = config.model ?? this.currentModel;
+    this.thinkingOptionId = config.thinkingOptionId ?? this.thinkingOptionId;
+    this.currentTitle = config.title ?? this.currentTitle;
+    this.bootstrapThreadEventPending = true;
+    await this.applyConfiguredOverrides();
   }
 
   async initializeNewSession(): Promise<void> {
