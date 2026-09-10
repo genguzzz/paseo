@@ -53,10 +53,6 @@ interface GenericACPAgentClientOptions {
   extensionCommandsParser?: ACPExtensionCommandsParser;
   catalogModelResolver?: ACPCatalogModelResolver;
   now?: () => number;
-  prewarm?: {
-    cwd: string;
-    count: number;
-  };
 }
 
 const GENERIC_ACP_AVAILABILITY_CACHE_TTL_MS = 5 * 60_000;
@@ -89,7 +85,6 @@ export class GenericACPAgentClient extends ACPAgentClient {
       extensionCommandsParser: options.extensionCommandsParser,
       catalogModelResolver: options.catalogModelResolver,
       now: options.now,
-      prewarm: options.prewarm,
     });
 
     this.command = options.command;
