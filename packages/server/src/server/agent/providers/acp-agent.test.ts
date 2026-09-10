@@ -425,7 +425,7 @@ function prepareConfiguredOverrideSession(
 
 test("ACP setModel only uses config-option fallback when the matching select choice contains the model", async () => {
   const logger = createTestLogger();
-  const childLogger = { trace: vi.fn(), warn: vi.fn() };
+  const childLogger = { trace: vi.fn(), info: vi.fn(), warn: vi.fn() };
   vi.spyOn(logger, "child").mockReturnValue(asInternals<typeof logger>(childLogger));
   const session = createSessionWithConfig({}, logger);
   const setSessionConfigOption = vi.fn(async () => ({
@@ -880,7 +880,7 @@ describe("ACPAgentSession Zed parity", () => {
     expect(await validSession.getCurrentMode()).toBe("default");
 
     const logger = createTestLogger();
-    const childLogger = { trace: vi.fn(), warn: vi.fn() };
+    const childLogger = { trace: vi.fn(), info: vi.fn(), warn: vi.fn() };
     vi.spyOn(logger, "child").mockReturnValue(asInternals<typeof logger>(childLogger));
     const invalidSession = createSessionWithConfig(
       { modeId: "acceptEdits", model: "opus" },
@@ -927,7 +927,7 @@ describe("ACPAgentSession Zed parity", () => {
 
   test("does not fail session start when configured model cannot be applied by ACP", async () => {
     const logger = createTestLogger();
-    const childLogger = { trace: vi.fn(), warn: vi.fn() };
+    const childLogger = { trace: vi.fn(), info: vi.fn(), warn: vi.fn() };
     vi.spyOn(logger, "child").mockReturnValue(asInternals<typeof logger>(childLogger));
     const session = createSessionWithConfig(
       { provider: "deepseek-tui", model: "deepseek/v4" },
